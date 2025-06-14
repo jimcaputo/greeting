@@ -58,15 +58,20 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 const val APP_NAME = "Marriage Saver"
 
-class SpeechRecognitionManager(
-    val context: Context,
-    val transcriptionViewModel: TranscriptionViewModel): RecognitionListener {
+object SpeechRecognitionManager: RecognitionListener {
+
+    lateinit private var context: Context
+    lateinit private var transcriptionViewModel: TranscriptionViewModel
 
     lateinit private var speechRecognizer: SpeechRecognizer
     lateinit private var speechIntent: Intent
     lateinit private var audioManager: AudioManager
 
-    public fun create() {
+    private var active: Boolean = false
+
+    public fun create(context: Context) {
+        this.context = context
+
         audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
         audioManager.adjustStreamVolume(AudioManager.STREAM_ALARM, AudioManager.ADJUST_MUTE, 0)
@@ -83,7 +88,18 @@ class SpeechRecognitionManager(
         speechIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
 
         speechRecognizer.setRecognitionListener(this)
+    }
+
+    public fun start(transcriptionViewModel: TranscriptionViewModel) {
+        this.transcriptionViewModel = transcriptionViewModel
+        this.transcriptionViewModel.resetTranscription()
         speechRecognizer.startListening(speechIntent)
+        active = true
+    }
+
+    public fun stop() {
+        speechRecognizer.stopListening()
+        active = false
     }
 
     override fun onError(errorCode: Int) {
@@ -99,7 +115,9 @@ class SpeechRecognitionManager(
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> Log.v(APP_NAME,"No speech input")
             SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> Log.v(APP_NAME, "Language not available (ie downloaded yet)")
             SpeechRecognizer.ERROR_NO_MATCH -> {
-                speechRecognizer.startListening(speechIntent)
+                if (active == true) {
+                    speechRecognizer.startListening(speechIntent)
+                }
             }
             else -> Log.v(APP_NAME, "Error Code: $errorCode")
         }
@@ -109,14 +127,16 @@ class SpeechRecognitionManager(
         val words = bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
         //val scores = bundle.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
         Log.v(APP_NAME, words!![0])
-        transcriptionViewModel.updateTranscription(words!![0])
-        if (words[0].startsWith("Okay Donald", ignoreCase = true) == true) {
-            Log.v(APP_NAME, "Keyword detected!")
+        transcriptionViewModel.appendTranscription(words[0])
+        if (words[0].startsWith(transcriptionViewModel.activationPhrase, ignoreCase = true) == true) {
+            transcriptionViewModel.appendTranscription("Activation Detected")
             //val notificationUri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             //val mediaPlayer = MediaPlayer.create(context, notificationUri)
             //mediaPlayer.start()
         }
-        speechRecognizer.startListening(speechIntent)
+        if (active == true) {
+            speechRecognizer.startListening(speechIntent)
+        }
     }
 
     override fun onReadyForSpeech(bundle: Bundle) {
@@ -147,11 +167,11 @@ class SpeechRecognitionManager(
 
 class MainActivity : ComponentActivity() {
 
-    //private val transcriptionViewModel = TranscriptionViewModel()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        SpeechRecognitionManager.create(applicationContext)
 
         setContent {
             GreetingCardTheme {
@@ -163,25 +183,30 @@ class MainActivity : ComponentActivity() {
 
 
 class TranscriptionViewModel : ViewModel() {
-    var transcription by mutableStateOf("fuck off")
-        private set
+    var transcription by mutableStateOf("Transcription goes here...")
+    var activationPhrase by mutableStateOf("Hey Donald")
 
-    public fun updateTranscription(text: String) {
-        transcription = text
+    public fun resetTranscription() {
+        transcription = ""
     }
 
-
+    public fun appendTranscription(text: String) {
+        if (transcription == "") {
+            transcription = text
+        } else {
+            transcription += "\n" + text
+        }
+    }
 }
+
 
 @Composable
 fun Greeting(transcriptionViewModel: TranscriptionViewModel = viewModel()) {
-    val context = LocalContext.current
     var buttonText by rememberSaveable { mutableStateOf("Start Capture") }
 
     Column(
         //verticalArrangement = Arrangement.SpaceEvenly,
         horizontalAlignment = Alignment.CenterHorizontally,
-
         modifier = Modifier.fillMaxSize()
     ) {
         Text(
@@ -191,6 +216,27 @@ fun Greeting(transcriptionViewModel: TranscriptionViewModel = viewModel()) {
             color = Color.Blue
         )
         Row(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Activation Phrase",
+                fontSize = 14.sp,
+                lineHeight = 24.sp,
+                color = Color.Blue
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            TextField(
+                value = "",
+                onValueChange = { transcriptionViewModel.activationPhrase = it },
+                label = { Text(transcriptionViewModel.activationPhrase) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Row(
             horizontalArrangement = Arrangement.Center,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -198,12 +244,12 @@ fun Greeting(transcriptionViewModel: TranscriptionViewModel = viewModel()) {
                 modifier = Modifier.padding(10.dp),
                 onClick = {
                     if (buttonText == "Start Capture") {
-                        val speechRecognitionManager = SpeechRecognitionManager(
-                            context = context, transcriptionViewModel = transcriptionViewModel)
-                        speechRecognitionManager.create()
+                        transcriptionViewModel.resetTranscription()
+                        SpeechRecognitionManager.start(transcriptionViewModel)
                         buttonText = "Stop Capture"
                     }
                     else {
+                        SpeechRecognitionManager.stop()
                         buttonText = "Start Capture"
                     }
                 }
@@ -215,11 +261,11 @@ fun Greeting(transcriptionViewModel: TranscriptionViewModel = viewModel()) {
             Button(
                 modifier = Modifier.padding(10.dp),
                 onClick = {
-                    transcriptionViewModel.updateTranscription("foobar")
+                    transcriptionViewModel.resetTranscription()
                 }
             ) {
                 Text(
-                    text = "Update Transcription"
+                    text = "Reset Transcription"
                 )
             }
         }
